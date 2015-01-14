@@ -15,8 +15,8 @@
 # copies of the Software, and to permit persons to whom the Software is         #
 # furnished to do so, subject to the following conditions:                      #
 #                                                                               #
-# The above copyright notice and this permission notice shall be included in all#
-# copies or substantial portions of the Software.                               #
+# The above copyright notice and this permission notice shall be included in    #
+# all copies or substantial portions of the Software.                           #
 #                                                                               #
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR    #
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,      #
@@ -32,9 +32,12 @@ from subprocess import Popen, PIPE, STDOUT
 import os.path
 import pickle
 import glob
+import sys
 import numpy as np
 from astropy.io import ascii
-from astropy.table import Table, hstack
+from astropy.table import Table, hstack, Column
+from time import sleep
+import threading
 import math
 import warnings as warn
 from collections import OrderedDict
@@ -42,27 +45,28 @@ from os.path import expanduser
 
 # Check: Binaries fraction/scenarios
 
-if not os.environ.has_key("PEGASE_HOME"):
+if not ("PEGASE_HOME") in os.environ.keys():
     warn.warn('Warning: PEGASE_HOME not set, using default')
- 
+
 pypeg_yorn = {True: 'y', False: 'n'}
 
-def write_file(filename, s):
-    with open(PEGASE.pegase_dir + filename, "w") as myfile:
-        myfile.write(s)
-
-def read_file(filename):
-    with open (PEGASE.pegase_dir + filename, "r") as myfile:
-        contents = myfile.read()
-    return contents
-
 pegdefaults = OrderedDict(
-    imf = "IMF_Salpeter",
-    imf_lower_mass = 0.1,
-    imf_upper_mass = 120,
-    sfr_type = "EXPONENTIAL_DECREASE",
-    sfr_p1 = 1000,
-    sfr_p2 = 1,
+    imf="IMF_Salpeter",
+    imf_lower_mass=0.1,
+    imf_upper_mass=120,
+    sfr_type="EXPONENTIAL_DECREASE",
+    sfr_p1=1000,
+    sfr_p2=1,
+    scenario_binaries_fraction=0.05,
+    scenario_metallicity_ism=0,
+    scenario_infall=False,
+    scenario_sfr=None,
+    scenario_metallicity_evolution=True,
+    scenario_substellar_fraction=0,
+    scenario_winds=False,
+    scenario_neb_emission=True,
+    scenario_extinction="NO_EXTINCTION",
+    scenario_inclination=0
     )
 mydefaults = pegdefaults.copy()
 
@@ -72,8 +76,9 @@ try:
         for line in f:
             if line.strip() == "":
                 continue
-                values = [l.strip() for l in line.split('=')]
-                mydefaults[values[0]] = values[1]
+            values = [l.strip() for l in line.split('=')]
+            mydefaults[values[0]] = values[1]
+            
 except IOError:
     pass
 
@@ -88,31 +93,35 @@ def get_default(key, defaultVal):
 class IMF(object):
     """
     Wrapper around an Initial Mass Function definition for use by PEGASE.
-    When PEGASE.generate is called, this class will generate the correct i
+    When PEGASE.generate is called, this class will generate the corect i
     inputs to the PEGASE binaries, either by using pre-packaged IMFs
     such as Salpeter or Scalo86, or generating a custom file at runtime.
     """
-    IMF_Kennicutt =         1
-    IMF_Kroupa =            2
-    IMF_MillerScalo =       3
-    IMF_Salpeter =          4
-    IMF_Scalo86 =           5
-    IMF_Scalo98 =           6
-    LOGNORMAL =             7
-    RANA_AND_BASU =         8
-    FERRINI =               9
-    CUSTOM =                10
+    IMF_Kennicutt = 1
+    IMF_Kroupa = 2
+    IMF_MillerScalo = 3
+    IMF_Salpeter = 4
+    IMF_Scalo86 = 5
+    IMF_Scalo98 = 6
+    LOGNORMAL = 7
+    RANA_AND_BASU = 8
+    FERRINI = 9
+    CUSTOM = 10
 
     def __init__(self, number=None, lower_mass=None, upper_mass=None, powers=None, gamma=None):
         """
         Models an IMF for PEGASE to use.
-        :param number: The type of IMF - either a predefined one (e.g. IMF.IMF_Salpeter) or IMF.CUSTOM type.
+        :param number: The type of IMF - either a predefined one (e.g.
+        IMF.IMF_Salpeter) or IMF.CUSTOM type.
         :param lower_mass: The lower bound for the IMF in M_sun, default 0.1
         :param upper_mass: The upper bound for the IMF in M_sun, default 120
-        :param powers: For a custom IMF only. A list of tuples representing the lower mass for the power law and the power value.
-        For instance, Scalo 86 would look like [(0.1, 3.2), (0.11, 2.455), (0.14, 2.0), ..., (41.69, -1.778)]
-        :param gamma: A shortcut to creating a custom IMF, a power law with only one value for the entire mass range. A gamma of -1.35
-        is equivalent to the default Salpeter IMF.
+        :param powers: For a custom IMF only. A list of tuples representing the
+        lower mass for the power law and the power value.
+        For instance, Scalo 86 would look like [(0.1, 3.2), (0.11, 2.455),
+        (0.14, 2.0), ..., (41.69, -1.778)]
+        :param gamma: A shortcut to creating a custom IMF, a power law with
+        only one value for the entire mass range. A gamma of -1.35 is
+        equivalent to the default Salpeter IMF.
         :return:
         """
         self.number = number
@@ -163,68 +172,195 @@ class Extinction(object):
 
 
 class Scenario(object):
-    def __init__(self, binaries_fraction=0.05, metallicity_ism_0=0, infall=False, sfr=None,
-                 metallicity_evolution=True, substellar_fraction=0, winds=False, neb_emission=True,
+    def __init__(self, binaries_fraction=0.05, metallicity_ism_0=0,
+                 infall=False, infall_timescale=1e3, infall_gas_metallicity=0,
+                 sfr=None,
+                 metallicity_evolution=True, stellar_metallicity=0.02,
+                 substellar_fraction=0,
+                 galactic_winds=False, age_of_winds=2.001e4,
+                 neb_emission=True, 
                  extinction=Extinction.NO_EXTINCTION, inclination=0):
-        # self.name = name
+
         self.binaries_fraction = binaries_fraction
-        self.metallicity = metallicity_ism_0
+        self.metallicity_ism_0 = metallicity_ism_0
         self.infall = infall
+        self.infall_timescale = infall_timescale
+        self.infall_gas_metallicity = infall_gas_metallicity
         self.sfr = sfr
         self.metallicity_evolution = metallicity_evolution
+        self.stellar_metallicity = stellar_metallicity
         self.substellar_fraction = substellar_fraction
-        self.winds = winds
+        self.galactic_winds = galactic_winds
+        self.age_of_winds = age_of_winds
         self.neb_emission = neb_emission
         self.extinction = extinction
         self.inclination = inclination
 
         if sfr is None:
-            self.sfr = SFR(eval("SFR." + get_default("sfr_type", "EXPONENTIAL_DECREASE")),
-                                p1=get_default("sfr_p1", 1e3),
-                                p2=get_default("sfr_p2", 1.0)
-                                )
+            self.sfr = SFR(eval("SFR." + get_default("sfr_type",
+                                                     "EXPONENTIAL_DECREASE")),
+                           p1=get_default("sfr_p1", 1e3),
+                           p2=get_default("sfr_p2", 1.0))
 
-                                
+
 class SFR(object):
-    """ Star formation rate to use in scenarios.
+    """ Star formation rate/history to use in scenarios.
     Defaults is EXPONENTIAL_DECREASE, p1=1000, p2=1
     Note this isn't the PEGASE default, which is instant burst.
     """
+    FILE_SFR_AND_Z = -2
+    FILE_SFR = -1
     INSTANT_BURST = 0
     CONSTANT = 1
     EXPONENTIAL_DECREASE = 2
     GAS_POWER_LAW = 3
 
-    def __init__(self, sfrtype=EXPONENTIAL_DECREASE, p1=None, p2=None):
+    def __init__(self, sfrtype=EXPONENTIAL_DECREASE, p1=None, p2=None,
+                 filename=None):
         self.sfrtype = sfrtype
         self.p1 = p1
         self.p2 = p2
+        self.filename = filename
         if p1 is None and sfrtype == SFR.EXPONENTIAL_DECREASE:
             p1 = 1000
         if p2 is None and sfrtype == SFR.EXPONENTIAL_DECREASE:
             p2 = 1
+        if p1 is None and sfrtype == SFR.CONSTANT:
+            p1 = 5e-5
+        if p2 is None and sfrtype == SFR.CONSTANT:
+            p2 = 0.20001E05
+        if p1 is None and sfrtype == SFR.GAS_POWER_LAW:
+            p1 = 1
+        if p2 is None and sfrtype == SFR.GAS_POWER_LAW:
+            p2 = 3e3
+        
+
+
 
 class SSP(object):
     """ Parameters to be passed to SSPs.f
     """
-    def __init__(self, imf=None, ejecta=SNII_ejecta.MODEL_B, winds=True):
+    def __init__(self, imf=None, ejecta=SNII_ejecta.MODEL_B,
+                 galactic_winds=True):
         """
 
         :param imf: An IMF instance. If not provided, defaults to Salpeter 55
         :param ejecta: Defaults to SNII_ejecta.MODEL_B
-        :param winds: On or off, defaults to True
+        :param galactic_winds: On or off, defaults to True
         :return:
         """
-        self.winds = winds
+        self.galactic_winds = galactic_winds
         self.ejecta = ejecta
-        if winds is None:
-            winds = get_default("ssp_winds", True)
+        if galactic_winds is None:
+            galactic_winds = get_default("ssp_winds", True)
         if ejecta is None:
             self.ejecta = eval('SNII_ejecta.' +
                                get_default('ssp_ejecta', 'MODEL_B'))
         self.imf = imf
         if imf is None:
             self.imf = IMF()
+
+class Filter(object):
+    """Represents a filter as used by PEGASE and this code to
+generate colors."""
+
+    @classmethod
+    def get_by_name(cls, name):
+        filters = Filter.get_all()
+        for filter in filters:
+            if filter.name == name:
+                return filter
+        return None
+
+    @classmethod
+    def get_all(cls):
+        filters_string = PEGASE._read_file("filters.dat")
+        lines = filters_string.split("\n")
+        num_filters = int(lines[0].strip())
+        filters = []
+        line_num = 1
+        for i in range(num_filters):
+            fdata = lines[line_num].split()
+            txs = []
+            for j in range(int(fdata[0])):
+                a, b = lines[line_num + j + 1].split()
+                txs.append((float(a), float(b)))
+            line_num += (int(fdata[0]) + 1)
+            f = Filter(fdata[3].replace("'", ""), txs,
+                       transmission_type=int(fdata[1]),
+                       calibration_type=int(fdata[2]))
+            filters.append(f)
+        return filters
+
+    def __init__(self, name, transmissions, transmission_type=0,
+                 calibration_type=1):
+        """
+        :param name: A name for the filter to be used in outputs
+        :param responses: A list of tuples, or a 2D numpy aray, containing
+        wavelength-response
+        pairs.
+        """
+        self.name = name
+        self.transmissions = transmissions
+        self.transmission_type = transmission_type
+        self.calibration_type = calibration_type
+
+    def get_transmission_at_wavelength(self, wavelength):
+        for i, trans in enumerate(self.transmissions):
+            if trans[0] <= wavelength and i < len(self.transmissions) - 1 \
+               and self.transmissions[i+1][0] > wavelength:
+                # Linear interpolation
+                t = self.transmissions[i]
+                t1 = self.transmissions[i+1]
+                t_coeff = ((wavelength - t[0])/(t1[0] - t[0]))*(t1[1]-t[1]) + t[1]
+                return t_coeff
+        return 0.
+
+    def get_lower_bound(self):
+        return self.transmissions[0][0]
+
+    def get_upper_bound(self):
+        return self.transmissions[-1][0]
+
+    def get_midpoint(self):
+        tot = 0
+        for tx in self.transmissions:
+            tot += tx[0]
+        return tot/float(len(self.transmissions))
+
+    def get_calibration(self):
+        """Get filter calibration info. Example: filter.get_calibration()['mAV(Vega)']
+        :return: A table row for the filter, with columns matching those in calib.dat
+        """
+        calib = PEGASE.get_calib()
+        for f in calib:
+            if f['filter'] == self.name:
+                return f
+        return None
+    
+    def to_string(self):
+        result = "%d    %d      %d        '%s' (pypegase)\n" % (
+            len(self.transmissions),
+            self.transmission_type,
+            self.calibration_type,
+            self.name)
+        for trans in self.transmissions:
+            result += "%.0f    %.3f\n" % (trans[0], trans[1])
+        return result
+
+    def save_filter(self):
+        """Saves the filter to filters.dat and runs calib.f. Doesn't mess with 
+        colors.f and Fortran formats, though."""
+        filters = PEGASE._read_file("filters.dat")
+        filters_lines = filters.split("\n")
+        PEGASE._write_file("filters.dat.bak", filters)
+        filter_number = (int(filters_lines[0]) + 1)
+        filters_lines[0] = "  %d" % filter_number
+        filters = "\n".join(filters_lines)
+        filters += self.to_string()
+        PEGASE._write_file("filters.dat", filters)
+        PEGASE._call_binary("calib", "")
+        print "Filter saved with number %d." % filter_number
 
 
 class PEGASE(object):    
@@ -237,15 +373,26 @@ class PEGASE(object):
         pegase_dir = pegase_dir + '/'
 
     _datafiles = [
-        '_SSPs.dat', '_tracksZ0.004.dat', '_colors.dat', '_tracksZ0.008.dat',
+        '_SSPs.dat', '_tracksZ0.004.dat', '_tracksZ0.008.dat',
         '_scenarios.dat', '_tracksZ0.02.dat', '_tracksZ0.0001.dat',
-        '_tracksZ0.05.dat', '_spectra.dat', '_tracksZ0.0004.dat',
-        '_tracksZ0.1.dat'
+        '_tracksZ0.05.dat', '_tracksZ0.0004.dat',
+        '_tracksZ0.1.dat' # plus colors_n_ and spectra_n_
     ]
+    
+    @classmethod
+    def _write_file(cls, filename, s):
+        with open(PEGASE.pegase_dir + filename, "w") as myfile:
+            myfile.write(s)
+        
+    @classmethod
+    def _read_file(cls, filename):
+        with open (PEGASE.pegase_dir + filename, "r") as myfile:
+            contents = myfile.read()
+        return contents
 
     @classmethod
     def list_defaults(cls):
-        for key, val in mydefaults.iteritems():
+        for key, val in pegdefaults.iteritems():
             print "%s = %s" % (key, val)
             
     @classmethod
@@ -270,6 +417,17 @@ class PEGASE(object):
             pegs.append(PEGASE.from_file(file))
         return pegs
 
+    @classmethod
+    def get_calib(cls):
+        calib_data = PEGASE._read_file("calib.dat")
+        calib_data = calib_data.replace("mean lambda", "mean_lambda")
+        calib_data = calib_data.replace("lambda eff(Vega)", "lambda_eff(Vega)")
+        table = ascii.read(calib_data, names=[
+            "filter","index","Flambda(Vega)","area","mean lambda",
+            "lambda eff(Vega)","mAB(Vega)","mTG(Vega)","Flambda(Sun)"
+        ])
+        return table
+        
     def __init__(self, name, ssps=None, scenarios=None):
         self.name = name
         self.ssps = ssps
@@ -287,14 +445,14 @@ class PEGASE(object):
 
     def is_generated(self):
         """
-        Returns the generated flag, i.e. the PEGASE binaries have been executed and the output exists ready to be
-        queried.
+        Returns the generated flag, i.e. the PEGASE binaries have been 
+        executed and the output exists ready to be queried.
         :return: True if the files exist.
         """
         return self.generated
 
     def generateSSPs(self):
-        self.cleanup_files() # Remove existing files if present
+        self.cleanup_files(silent=True)  # Remove existing files if present
 
         custom_IMF = False
         original_IMFs = None
@@ -303,43 +461,55 @@ class PEGASE(object):
         if self.ssps.imf.number == IMF.CUSTOM:
             # set a flag for cleanup
             custom_IMF = True
-            original_IMFs = read_file("list_IMFs.dat")
+            original_IMFs = PEGASE._read_file("list_IMFs.dat")
 
             # write the IMF to a file
             custom_IMF_string = self.ssps.imf.formal_string()
             custom_IMF_file = "imfcustom.dat"
-            write_file(custom_IMF_file, custom_IMF_string)
+            PEGASE._write_file(custom_IMF_file, custom_IMF_string)
 
             # append that filename to the list_IMFs.dat
-            write_file("list_IMFs.dat", original_IMFs.strip() + "\n" + custom_IMF_file + "\n")
+            PEGASE._write_file("list_IMFs.dat", original_IMFs.strip() +
+                               "\n" + custom_IMF_file + "\n")
 
-        print "Generating SSPs..."
-        result = self._call_binary('SSPs', self._get_ssps_string())
+        self._progress(0, "Generating SSPs")
+
+        try:
+            result = PEGASE._call_binary('SSPs', self._get_ssps_string())
+        except Exception as e:
+            if custom_IMF:
+                PEGASE._write_file("list_IMFs.dat", original_IMFs)
+                try:
+                    os.remove(custom_IMF_file)
+                except OSError as er:
+                    print "Eror cleanup: can't remove " + custom_IMF_file
+                    print er
+            raise e
+        
         # check it worked
-        if result[1].rfind("error") > -1 or result[0] != 0:
+        if result[1].rfind("eror") > -1 or result[0] != 0:
             raise Exception("SSPs: " + result[1] + " -- " + str(result[0]))
         ssp_file = self.name + "_SSPs.dat"
         if os.path.isfile(PEGASE.pegase_dir + ssp_file):
             self._ssps_file = ssp_file
         else:
             raise Exception("SSPs file, " + ssp_file + " not created.")
-        if not os.path.isfile(PEGASE.pegase_dir + self.name + "_tracksZ0.0004.dat"):
+        if not os.path.isfile(PEGASE.pegase_dir + self.name + 
+"_tracksZ0.0004.dat"):
             raise Exception("Track file(s) missing.")
 
-        print "Done."
         if custom_IMF:
-            write_file("list_IMFs.dat", original_IMFs)
+            PEGASE._write_file("list_IMFs.dat", original_IMFs)
             try:
                 os.remove(custom_IMF_file)
-            except OSError as err:
-                print "Can't remove " + custom_IMF_file
-                print err
+            except OSError as er:
+                print "Cleanup: can't remove " + custom_IMF_file
+                print er
         return True
 
     def generateScenarios(self):
-        print "\nGenerating scenarios..."
-        result = self._call_binary('scenarios', self._get_scenario_string())
-        if result[1].rfind("error") > -1 or result[0] != 0:
+        result = PEGASE._call_binary('scenarios', self._get_scenario_string())
+        if result[1].rfind("eror") > -1 or result[0] != 0:
             raise Exception("Scenarios: " + result[1] + " -- " + str(result[0]))
         scenarios_file = self.name + "_scenarios.dat"
         if os.path.isfile(PEGASE.pegase_dir + scenarios_file):
@@ -347,12 +517,9 @@ class PEGASE(object):
         else:
             raise Exception("Scenarios file, " + scenarios_file + " not created.")
 
-        print "Done."
-
     def generateSpectra(self):
-        print "Generating spectra..."
-        result = self._call_binary('spectra', self._get_spectra_string())
-        if result[1].rfind("error") > -1 or result[0] != 0:
+        result = PEGASE._call_binary('spectra', self._get_spectra_string())
+        if result[1].rfind("eror") > -1 or result[0] != 0:
             raise Exception("Scenarios: " + result[1] + " -- " +
                             str(result[0]))
         for i, scenario in enumerate(self.scenarios):
@@ -363,13 +530,11 @@ class PEGASE(object):
                 raise Exception("Spectra file, " + spectra_file +
                                 " not created.")
 
-        print "Done."
 
     def generateColors(self):
-        print "Generating colors..."
         for i in range(len(self.scenarios)):
-            result = self._call_binary('colors', self._get_colors_string(i+1))
-            if result[1].rfind("error") > -1 or result[0] != 0:
+            result = PEGASE._call_binary('colors', self._get_colors_string(i+1))
+            if result[1].rfind("eror") > -1 or result[0] != 0:
                 raise Exception("Colors: " + result[1] +
                                 " -- " + str(result[0]))
 
@@ -379,7 +544,30 @@ class PEGASE(object):
             else:
                 raise Exception("colors file, " + colors_file +
                                 " not created.")
-        print "Done."
+
+    def _progress(self, progress, message=""):
+        sys.stdout.write('\r{0} [{1}] {2}%   {3}'.format(
+            "Generating: ", ('#'*int(progress/5)).ljust(20, " "), 
+            int(progress), message))
+        sys.stdout.flush()
+
+    def _generate(self, flagobj, *args):
+        try:
+            flagobj['message'] = "(Creating SSP tracks)"
+            self.generateSSPs()
+            flagobj['message'] = "(Creating scenarios)"
+            self.generateScenarios()
+            flagobj['message'] = "(Creating spectra)"
+            self.generateSpectra()
+            flagobj['message'] = "(Creating colors)"
+            self.generateColors()
+            self.generated = True
+        except Exception as ex:
+            flagobj['finished'] = True
+            flagobj['message'] = 'Eror'
+            raise ex
+        
+        flagobj['finished'] = True
 
     def generate(self):
         """
@@ -388,27 +576,36 @@ class PEGASE(object):
         generated flag to True.
         :return: True if successful
         """
-        self.generateSSPs()
-        self.generateScenarios()
-        self.generateSpectra()
-        self.generateColors()
-        self.generated = True
-        return True
 
+        flagobj = dict()
+        flagobj['finished'] = False
+        flagobj['message'] = "Starting"
+        
+        generating_thread = threading.Thread(target=self._generate, args=(flagobj,))
+        generating_thread.start()
+        
+        total_files = 9 + len(self.scenarios)*2
+        while not flagobj['finished']:
+            filecount = len([name for name in os.listdir(PEGASE.pegase_dir) if os.path.isfile(
+                os.path.join(PEGASE.pegase_dir, name)) and name.startswith(self.name + "_")])
+            self._progress(100.0 * filecount/total_files, flagobj['message'])
+            if flagobj['message'] == 'Eror':
+                break
+            sleep(0.1)
+        print ""
+        return True
+        
     def _get_ssps_string(self):
         """
         Generates the inputs to SSPs.f
 
         :return: String to be sent to stdin for that binary.
         """
-        if self.ssps.imf.number < IMF.RANA_AND_BASU:
-            imf = self.ssps.imf
-            return "%d\n%.2f\n%4.2f\n%s\n%s\n%s\n\n" % (
-                imf.number if imf.number != IMF.CUSTOM else 7, imf.lower_mass,
-                imf.upper_mass, self.ssps.ejecta, pypeg_yorn[self.ssps.winds],
-                self.name)
-        else:
-            return "todo"
+        imf = self.ssps.imf
+        return "%d\n%.2f\n%4.2f\n%s\n%s\n%s\n\n" % (
+            imf.number if imf.number != IMF.CUSTOM else 7, imf.lower_mass,
+            imf.upper_mass, self.ssps.ejecta, pypeg_yorn[self.ssps.galactic_winds],
+            self.name)
 
     def _get_scenario_string(self):
         """
@@ -420,25 +617,37 @@ class PEGASE(object):
         result = "%s\n%s\n%.4f\n" % \
                  (self.name + "_scenarios.dat", self.name + "_SSPs.dat",
                   self.scenarios[0].binaries_fraction)
-        
-        for i, sc in enumerate(self.scenarios):
-            result += "%s\n%.4f\n%s\n%d\n" % (self.name + "_spectra" +
-                                              str(i + 1) + ".dat",
-                                              sc.metallicity,
-                                              pypeg_yorn[sc.infall],
-                                              sc.sfr.sfrtype)
 
-            if sc.sfr.sfrtype is not SFR.INSTANT_BURST:
+        for i, sc in enumerate(self.scenarios):
+            result += "%s\n%.4f\n%s\n" % (self.name + "_spectra" +
+                                              str(i + 1) + ".dat",
+                                              sc.metallicity_ism_0,
+                                              pypeg_yorn[sc.infall])
+            if sc.infall:
+                result += "%.4f\n%.4f\n" % (sc.infall_timescale, sc.infall_gas_metallicity)
+
+            result += "%d\n" % sc.sfr.sfrtype
+
+            if sc.sfr.sfrtype in [SFR.CONSTANT, SFR.EXPONENTIAL_DECREASE, SFR.GAS_POWER_LAW]:
                 result += "%.4f\n%.4f\n" % (sc.sfr.p1, sc.sfr.p2)
 
-                result += "%s\n%.4f\n%s\n%s\n%d\n" % (
-                    pypeg_yorn[sc.metallicity_evolution],
-                    sc.substellar_fraction,
-                    pypeg_yorn[sc.winds], pypeg_yorn[sc.neb_emission],
-                    sc.extinction)
+            if sc.sfr.sfrtype in [SFR.FILE_SFR, SFR.FILE_SFR_AND_Z]:
+                result += "%s\n" % (sc.filename)
 
-                if sc.extinction == Extinction.EXTINCTION_DISK_SPECIFIC:
-                    result += "%.4f\n" % sc.inclination
+            if sc.sfr.sfrtype != SFR.FILE_SFR_AND_Z:
+                result += "%s\n" % pypeg_yorn[sc.metallicity_evolution]
+                if not sc.metallicity_evolution:
+                    result += "%.4f\n" % sc.stellar_metallicity 
+
+            result += "%.4f\n%s\n" % (sc.substellar_fraction,
+                                      pypeg_yorn[sc.galactic_winds])
+            if sc.galactic_winds:
+                result += "%.4f\n" % sc.age_of_winds
+
+            result += "%s\n%d\n" % (pypeg_yorn[sc.neb_emission], sc.extinction)
+
+            if sc.extinction == Extinction.EXTINCTION_DISK_SPECIFIC:
+                result += "%.4f\n" % sc.inclination
 
         return result + "end\n"
 
@@ -459,8 +668,8 @@ class PEGASE(object):
         return "%s\n%s\n\n" % (self.name + "_spectra" + str(scenario)
                                + ".dat", self.name + "_colors" +
                                str(scenario) + ".dat")
-
-    def _call_binary(self, name, inputs):
+    @classmethod
+    def _call_binary(cls, name, inputs):
         # Spawns fortran binary and sends inputs via a pipe
         p = Popen([PEGASE.pegase_dir + name], stdout=PIPE, stdin=PIPE,
                   stderr=STDOUT, cwd=PEGASE.pegase_dir)
@@ -469,12 +678,14 @@ class PEGASE(object):
         # p.communicate() p.wait()
         return (p.returncode, str(stdout))
 
-    def colors(self, cols=None, scenario=1):
+    def colors(self, cols=None, scenario=1, time_lower=None, time_upper=None):
         """
         Returns an astropy table containing color information as output by colors.f.
         First column is the time (in Myr). Other columns are requested columns,
         or if none are provided, a table containing all columns in the file.
         :param cols: A list of column names to be returned, e.g. ['B-V', "g'-r'"]
+        :param time_lower: If specified, filters out rows with time below this value in Myr
+        :param time_upper: If specified, filters out rows with the time above this value
         :return: An astropy.table.table.Table representing the output in xxx_colors.dat
         """
         if not self.generated:
@@ -494,11 +705,11 @@ class PEGASE(object):
                 break
         datastart = i + 2
         timesteps = int(colordata_string[i+1].strip())
-        current = datastart
+        curent = datastart
         allresults = None
-        while current < len(colordata_string):
-            ttable = ascii.read(colordata_string[current:(current+timesteps+1)], quotechar='^')
-            current += (timesteps+1) # + header row
+        while curent < len(colordata_string):
+            ttable = ascii.read(colordata_string[curent:(curent+timesteps+1)], quotechar='^')
+            curent += (timesteps+1) # + header row
 
             if allresults is not None:
                 del ttable['time']
@@ -506,16 +717,19 @@ class PEGASE(object):
             else:
                 allresults = ttable
 
+        if time_lower is not None or time_upper is not None:
+            time_lower = time_lower if time_lower is not None else 0
+            time_upper = time_upper if time_upper is not None else 1e11
+
+            for rownum in range(len(allresults)-1, -1, -1):
+                if allresults['time'][rownum] < time_lower or \
+                   allresults['time'][rownum] > time_upper:
+                    allresults.remove_row(rownum)
+
         return allresults if cols is None else allresults[['time'] + cols]
 
-    def spectra(self, cols=None, scenario=1):
-        """
-        Returns an astropy table containing spectra information as output by spectra.f.
-        First column is the time (in Myr). Other columns are requested columns, or if none are provided,
-        a table containing all columns in the file.
-        :param cols: A list of column names to be returned, e.g. ['B-V', "g'-r'"]
-        :return: An astropy.table.table.Table representing the output in xxx_spectra.dat
-        """
+
+    def _spectra(self, scenario=1):
         if not self.generated:
             return None
         file_index = scenario - 1
@@ -534,16 +748,34 @@ class PEGASE(object):
         timesteps, wavelengths_count, lines_count = [
             int(s) for s in spectradata_string[i+1].split()
             ]
-        current = datastart
+        columns = "time m_gal m_star m_wd m_nsbh m_substellar m_gas z_ism z_stars_mass \
+        z_stars_bl l_bol od_v l_dust_l_bol sfr phot_lyman rate_snii rate_snia \
+        age_star_mass age_star_lbol".split()
+        return timesteps, wavelengths_count, lines_count, spectradata_string, datastart, columns
+    
+    def spectra(self, cols=None, scenario=1, time_lower=0, time_upper=1e10):
+        """
+        Returns an astropy table containing spectra information as output by spectra.f.
+        First column is the time (in Myr). Other columns are requested columns, or if none are provided,
+        a table containing all columns in the file.
+        :param cols: A list of column names to be returned, e.g. ['B-V', "g'-r'"]
+        :param time_lower: If specified, filters out rows with time below this value in Myr
+        :param time_upper: If specified, filters out rows with the time above this value
+        :param scenario: The number of the applicable scenario, defaults to the first.
+        :return: An astropy.table.table.Table representing the output in xxx_spectra.dat
+        """
+        if not self.generated:
+            return None
+        timesteps, wavelengths_count, lines_count, spectradata_string, datastart, columns \
+            = self._spectra(scenario=scenario)
+        
+        curent = datastart
 
         wavelengths_end = int(datastart + math.ceil(wavelengths_count/5.0) - 1)
         lines_start = wavelengths_end + 1
         lines_end = int(wavelengths_end + math.ceil(lines_count/5.0))
 
         block_length = lines_end - datastart + 2
-        
-        columns = "time m_gal m_star m_wd m_nsbh m_substellar m_gas z_ism z_stars_mass \
-        z_stars_bl l_bol od_v l_dust_l_bol sfr phot_lyman rate_snii rate_snia age_star_mass age_star_lbol".split()
 
         columns.extend(" ".join(spectradata_string[datastart:lines_end + 1]).split())
         indices = range(len(columns))
@@ -555,22 +787,104 @@ class PEGASE(object):
             indices = [columns.index(col) for col in cols]
             # But check there are no missing
             columns = cols
-            
+
         allresults = Table(names=columns)
-        
-        current = lines_end + 1
+
+        curent = lines_end + 1
         for i in range(timesteps):
-            block = spectradata_string[current:current+block_length + 1]
+            block = spectradata_string[curent:curent+block_length + 1]
             row = np.array(" ".join(block).split())[indices]
-            allresults.add_row(row)
-            current += block_length + 1
+
+            if (time_lower is None or int(row[0]) >= time_lower) and \
+               (time_upper is None or int(row[0]) <= time_upper):
+                allresults.add_row(row)
+            curent += block_length + 1
 
         return allresults
 
+    # TODO: Speedup
+    def get_spectrum(self, time=None, wl_lower=0, wl_upper=1600000, lines=False,
+                     continuum=True, scenario=1, redshift=0.0):  # , units='flux density'):
+        """At timestep t=time, returns spectral data between the specified wavelengths.
+        :param time: the timestep at which to return the spectum; if exact timestep does 
+        not exist, raises ValueEror
+        :param wl_lower: Lower wavelength to include
+        :param wl_upper: Upper wavelength to include
+        :param lines: Whether to include spectral lines (default False)
+        :param continuum: Whether to include continuum values (default True)
+        :param units: 'flux density' gives erg/s/Angstrom; 'flux' gives ergs/s, 
+        i.e. flux density * lambda 
+        :return: An astropy table containing columns 'wavelength', 'flux'
+        """
+        if time is None:
+            raise ValueError("No time specified")
+        if not (lines or continuum):
+            raise ValueError("Must specify either lines, continuum or both.")
+
+        timesteps, wavelengths_count, lines_count, spectradata_string, datastart, columns \
+            = self._spectra(scenario=scenario)
+        
+        spectra = self.spectra(time_lower=time, time_upper=time)
+        lambdas = []
+        vals = []
+        filters = (wl_lower, wl_upper)
+        line_wavelengths = spectra.columns[-lines_count:]
+        for col in spectra.colnames:
+            try:
+                if col in columns:
+                    continue
+                if not lines and col in line_wavelengths:
+                    continue
+                if not continuum and col not in line_wavelengths:
+                    continue
+                l = float(col)
+                l *= (1 + redshift)
+                if l > filters[0] and l < filters[1]:
+                    lambdas.append(l)
+                    # if units == 'flux':
+                    #     vals.append(spectra[col][0] * l)
+                    # else:
+                    vals.append(spectra[col][0])
+            except ValueError:
+                pass  # Not a wavelength, so ignore
+
+        result_table = Table()
+        result_table['wavelength'] = Column(lambdas, unit='Angstroms',
+                                            description='wavelength')
+        result_table['luminosity'] = Column(vals, unit='erg.s-1.A-1')
+        
+        return result_table
+
+    def get_integrated_color(self, timestep, filter_name, redshift=0.0,
+                             normalisation='AB'):
+        if normalisation not in ['AB', 'vega']:
+            raise ValueError("Normalisation must be 'AB' or 'vega'")
+
+        fil = Filter.get_by_name(filter_name)
+        wl_lower = fil.get_lower_bound()
+        wl_upper = fil.get_upper_bound()
+
+        spectrum = self.get_spectrum(time=timestep, redshift=redshift,
+                                     wl_lower=wl_lower, wl_upper=wl_upper)
+        lumo_ergs_s_integrated = 0.
+        integrated_t_lambda = 0.
+        c = 2.99792458e10
+
+        wavelengths = np.array(spectrum['wavelength'])
+        luminosities = np.array(spectrum['luminosity'])
+        transmissions = np.array([fil.get_transmission_at_wavelength(w)
+                                  for w in wavelengths])
+        lumo_ergs_s_integrated = np.sum(transmissions * luminosities)
+        integrated_t_lambda = np.sum((transmissions * c)/(wavelengths**2))
+#        integrated_t_lambda = fil.get_calib['area']
+        # lumo_ergs_s_integrated *= fil.get_midpoint()
+        return -2.5 * (np.log10(lumo_ergs_s_integrated) - np.log10(integrated_t_lambda)) \
+            - 48.6
+
     def save_to_file(self, filename=None):
         """
-        Saves the PEGASE instance to disk, so it can be unpickled later and provide convenient wrapper around
-        a set of parameters and output files.
+        Saves the PEGASE instance to disk, so it can be unpickled later and
+        provide convenient wrapper around a set of parameters and output files.
         :param filename: The file to pickle to.
         :return: None
         """
@@ -578,17 +892,24 @@ class PEGASE(object):
             filename = self.name + ".peg"
         pickle.dump(self, open(filename, "wb"))
 
-    def cleanup_files(self):
+    def cleanup_files(self, silent=False):
         """
         Removes all the file associated with this run of PEGASE. Sets generated flag to False.
-        :return:
+        :return: None
         """
         # Let's not use a wildcard so there's no surprises
-        for file in PEGASE._datafiles:
+        files_to_delete = []
+        files_to_delete.extend(PEGASE._datafiles)
+        files_to_delete.extend(["_colors" + str(i+1) + ".dat"
+                                for i in range(len(self.scenarios))])
+        files_to_delete.extend(["_spectra" + str(i+1) + ".dat"
+                                for i in range(len(self.scenarios))])
+        for file in files_to_delete:
             try:
                 os.remove(PEGASE.pegase_dir + self.name + file)
-                print "Removed %s" % (self.name + file)
-            except OSError: #  as err:
+                if not silent:
+                    print "Removed %s" % (self.name + file)
+            except OSError:  # as er:
                 # OK no matter
                 pass
         self.generated = False

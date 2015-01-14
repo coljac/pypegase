@@ -4,38 +4,54 @@ PyPegase 0.1
 Introduction
 ------------
 
-PyPegase provides a convenient way to generate galaxy models using the PEGASE[1] version 2 code. It provides a wrapper class that encapsulates
+PyPegase provides a convenient way to generate galaxy models using the `PEGASE <http://www2.iap.fr/users/fioc/PEGASE.html>`_ version 2 code. It provides a wrapper class that encapsulates
 the parameters to, and results from the PEGASE binaries. This makes it much simpler to explore the paramater space and examine the outputs from
 the resulting models.
-
+       
 PyPegase assumes you have a clean installation of the PEGASE2 code, and have compiled the Fortran sources to produce executable binaries called ``SSPs``,
-``scenarios``, ``spectra`` and ``colors``.
+``scenarios``, ``spectra``, ``calib`` and ``colors``.
 
-For more on PEGASE see: http://www2.iap.fr/users/fioc/PEGASE.html
+For more on PEGASE see the docs: http://arxiv.org/abs/astro-ph/9912179
+
+Installation and configuration
+------------------------------
+
+If you use pip, install with::
+
+  pip install pypegase
+
+alternatively, get from github::
+
+  git clone https://github.com/coljac/pypegase.git
+
+and add the directory to your ``PYTHONPATH`` environment variable.
+
+You will also need to point PyPegase to your PEGASE2 directory, the location of the binaries (such as ``SSPs``, etc). The best way to do this is with a ``PEGASE_HOME`` environment variable, but can be done at runtime by setting ``PEGASE.pegase_dir = "<path to PEGASE>"``.
+
+You can also create a ``.pypegase`` file to override the module's defaults - see defaults_ below.
 
 Usage
 -----
 
 Usage of PyPegase is centred on the PEGASE class which encapsulates a run of the PEGASE code. Other classes such
-as ``IMF``, ``SSP``, ``SFR`` and ``Scenario`` wrap the smaller components of the PEGASE code, though use of
-these is in many cases optional.
+as ``IMF``, ``SSP``, ``SFR`` and ``Scenario`` wrap the inputs to the PEGASE code, though use of
+these is in most cases optional.
 
 The basic workflow is as follows:
 
 - Create an ``IMF`` object for your model (optional)
 - Create an ``SSP`` object with the IMF (optional)
-- Create a ``Scenario`` object (optional)
+- Create one or more ``Scenario`` objects (optional)
 - Create ``PEGASE`` instance, passing in the above
 - Invoke ``.generate()`` on the ``PEGASE`` object, which generates the data files
 - Access the results via the ``colors()`` and ``spectra()`` methods
-- Save the results with ``save_to_file()`` so it can be later loaded with ``PEGASE.from_file()`` and save the generation time.
+- Save the resulting object with ``save_to_file()`` so it can be later loaded with ``PEGASE.from_file()`` and save on generation time.
 
 All of this can be done in one line, see the examples below.
 
-Because PyPegase needs access to the PEGASE binaries and all outputs are created in the same directory, it needs to know where
-in the file system the binaries are to be found. Either set an environment variable called ``PEGASE_HOME`` or set the variable
-``PEGASE.pegase_dir`` after importing pypegase.
+Note that all the outputs created by PEGASE end up in the PEGASE home directory.
 
+.. _defaults:
 
 Defaults
 --------
@@ -56,12 +72,12 @@ To see the built-in defaults, execute ``PEGASE.list_defaults()``. You can use th
 
   python -c "import pypegase as pp; pp.PEGASE.list_defaults()" > ~/.pypegase
 
-This will create an editable file for you, should you wish to override some of the defaults. (Note: If pypegase.py is not in your system's library dir, you will need it in the current directory or you can add the location of pypegase.py to to ``PYTHONPATH`` environment variable.)
+This will create an file for you that you can edit should you wish to override some of the defaults. (Note: If pypegase.py is not in your system's library dir, you will need it in the current directory or you can add the location of pypegase.py to to ``PYTHONPATH`` environment variable.)
 
 Spectra and colors
 ------------------
 
-Generated spectra and colors data can be obrained with the ``spectra()`` and ``colors()`` methods respectively. In each case the result will be an astropy table with a row for each timestep. 
+Generated spectra and colors data can be obtained with the ``spectra()`` and ``colors()`` methods respectively. In each case the result will be an Astropy `table.Table <http://docs.astropy.org/en/stable/table/index.html>`_  with a row for each timestep. 
 
 Both of these methods can take a list of columns as the ``cols`` parameter. For spectra especially the resulting table is very large and it may make sense to filter the results in this way. The available column names are the wavelengths and spectral lines as they appear in the xxx_spectra.dat file as well as the following::
 
@@ -72,9 +88,11 @@ Both of these methods can take a list of columns as the ``cols`` parameter. For 
 Note that column names must match PEGASE's file output exactly - so for instance  "100200." will work, but
 "100200" will not.
 	
-The available column names can be viewed with ``peg_instance.spectra().colnames()``.
+The available column names can be viewed with ``peg_instance.spectra().colnames()`` (and the same for colors).
 
-The resulting table can be utilised as ``table['colname']`` (returns entire column) or ``table['colname'][n]`` (returns column _colname_ at row _n_).
+The table returned by these methods can be further filtered with the ``time_lower`` and ``time_upper`` keywords; for example, to return only rows with a time between 100 and 13000 Myr, call ``colors(time_lower=100, time_upper=13e3)``.
+
+These methods return a table which can be accessed as ``mytable['colname']`` (returns entire column) or ``mytable['colname'][n]`` (returns column _colname_ at row _n_).
 
 Examples
 --------
@@ -85,17 +103,43 @@ Generate a set of data using the defaults, in files prefixed with ``mydata_``::
 
     PEGASE.pegase_dir = '/home/me/PEGASE.2/' # unless PEGASE_HOME is set
 
-    peg = PEGASE('mydata')
-    peg.generate() # some minutes may be required
+    peg = PEGASE('mydata') # default IMF, Scenario, etc
+    peg.generate() # some minutes may be required, console will show progress
     colors = peg.colors()
     colors['B-V'][-1] # B-V color at last timestep (20 Gyr) = .922
     plt.plot(colors['time'], colors['B-V']) # plot times versus B-V color
+    plt.plot(colors['time'], colors['B-V'], "b-", label="B-V") # plot times versus B-V color
+    plt.plot(colors['time'], colors['g-r'], "g-", label="g-r")
+    plt.legend(loc = 'lower right', numpoints=1)
 
     peg.save_to_file(peg.name + '.peg')
 
     peg2 = PEGASE.from_file(peg.name + '.peg')
     peg2.colors() # Same as above
 
+.. image:: images/example1.png
+
+Plotting a continuum spectrum at t=13000 Myr::
+
+  peg = ... # one I made earlier with defaults
+  spectra = peg.spectra(time_lower=13000, time_upper=13000)
+  lambdas = []
+  vals = []
+  filters = (4010, 7010) # lower, upper wavelengths (roughly V)
+  for col in spectra.colnames:
+      try:
+          l = float(col)
+          if l > filters[0] and l < filters[1]:
+              lambdas.append(l)
+              vals.append(spectra[col][0])
+      except ValueError:
+          pass # Column is not a number (i.e. wavelength)
+  plot(lambdas[:149], vals[:149], "b-") # Removed the lines for this example
+  xlabel("wavelength (Angstroms)")
+  ylabel("flux")
+
+.. image:: images/example_spectra.png
+	
 Specifying parameters explicitly (these are all the default values and any can be omitted)::
 
     peg = PEGASE("custom", ssps=SSP(
@@ -106,7 +150,8 @@ Specifying parameters explicitly (these are all the default values and any can b
         extinction=Extinction.NO_EXTINCTION
     ))
     peg.generate()
-    spec = peg.spectra(cols=['time', 'l_bol', '7135.00']
+    spec = peg.spectra(cols=['time', 'l_bol', '7135.00'])
+    spec['l_bol'][20] # == 2.499E34
 
 Experimenting with IMFs::
 
@@ -123,11 +168,13 @@ Experimenting with IMFs::
         (10., -2.3)
     ]) # A custom IMF equivalent to Miller-Scalo (see IMF_MillerScalo.dat)
 
+    peg = PEGASE("custom_imf", ssps=SSP(imf))
 
 Generating a series of models with varying parameters::
 
     pegase = PEGASE('test')
     for gamma in np.arange(-1.7, -1.0, 0.05):
+        # Reuse the same instance each iteration
         pegase.name = "imftest_" + str(gamma)
         pegase.ssps.imf = IMF(IMF.CUSTOM, gamma=gamma)
         pegase.generate()
@@ -136,9 +183,10 @@ Generating a series of models with varying parameters::
 Plotting the results::
 
     pegs = PEGASE.from_dir(".")
+    # Now we have a list of PEGASE instances
 
     for i, peg in enumerate(pegs):
-        colors = peg.colors(cols=['B-V']) # 'time' included by default
+        colors = peg.colors(cols=['B-V']) # Note 'time' included by default
         plt.plot(colors['time'], colors['B-V'])
 
     plt.suptitle(r'Color vs time for varying IMF gradient')
@@ -146,13 +194,16 @@ Plotting the results::
     plt.ylabel('color (B-V)')
     plt.show()
 
-.. image:: example.png
+.. image:: images/example.png
 
 Further work
 ------------
 
 Future versions will include:
 
+- Passing a redshift value into spectra and colors
+- Custom filters
+- Calculating colors directly from spectra information
 - Better ability to handle customised installations of PEGASE, in particular an altered IMF list/timesteps
 - Ability to instantiate from a dictionary, JSON and other formats
 - Ability to access color and spectra data by time as well as row number
@@ -162,6 +213,9 @@ Future versions will include:
 - Human-readable pickled (saved) files
 - Unit tests for a greater variety of scenarios
 - A more robust ``copy()`` implementation
+- Console GUI
 
-
-[1] http://arxiv.org/abs/astro-ph/9912179
+Acknowledgement
+---------------
+PyPegase was written with the support of the Centre for Astrophysics and Supercomputing at
+Swinburne University of Technology.
