@@ -163,7 +163,8 @@ class Extinction(object):
 
 
 class Scenario(object):
-    def __init__(self, binaries_fraction=0.05, metallicity_ism_0=0,
+    def __init__(self, description="",
+                 binaries_fraction=0.05, metallicity_ism_0=0,
                  infall=False, infall_timescale=1e3, infall_gas_metallicity=0,
                  sfr=None,
                  metallicity_evolution=True, stellar_metallicity=0.02,
@@ -172,6 +173,7 @@ class Scenario(object):
                  neb_emission=True, 
                  extinction=Extinction.NO_EXTINCTION, inclination=0.):
 
+        self.description = description
         self.binaries_fraction = binaries_fraction
         self.metallicity_ism_0 = metallicity_ism_0
         self.infall = infall
@@ -198,12 +200,12 @@ class Scenario(object):
 
     def __repr__(self):
         return (
-            "Scenario [\n    binaries_fraction=%.2f, metallicity_ism_0=%.4f, infall=%s," +
+            "Scenario (%s) [\n    binaries_fraction=%.2f, metallicity_ism_0=%.4f, infall=%s," +
             " infall_timescale=%.4f,\n    infall_gas_metallicity=%.4f,\n" +
             "    %s,\n    metallicity_evolution=%s, stellar_metallicity=%.4f,\n" +
             "    substellar_fraction=%.2f, galactic_winds=%s, age_of_winds=%.4f,\n" +
             "    neb_emission=%s, extinction=%d, inclination=%.2f\n]") % (
-                self.binaries_fraction, self.metallicity_ism_0,
+                self.description, self.binaries_fraction, self.metallicity_ism_0,
                 pypeg_yorn[self.infall], self.infall_timescale,
                 self.infall_gas_metallicity, self.sfr,
                 pypeg_yorn[self.metallicity_evolution],
@@ -231,17 +233,17 @@ class SFR(object):
         self.p2 = p2
         self.filename = filename
         if p1 is None and sfrtype == SFR.EXPONENTIAL_DECREASE:
-            p1 = 1000
+            self.p1 = 1000
         if p2 is None and sfrtype == SFR.EXPONENTIAL_DECREASE:
-            p2 = 1
+            self.p2 = 1
         if p1 is None and sfrtype == SFR.CONSTANT:
-            p1 = 5e-5
+            self.p1 = 5e-5
         if p2 is None and sfrtype == SFR.CONSTANT:
-            p2 = 0.20001E05
+            self.p2 = 0.20001E05
         if p1 is None and sfrtype == SFR.GAS_POWER_LAW:
-            p1 = 1
+            self.p1 = 1
         if p2 is None and sfrtype == SFR.GAS_POWER_LAW:
-            p2 = 3e3
+            self.p2 = 3e3
 
     def __str__(self):
         return self.__repr__()
@@ -589,7 +591,7 @@ class PEGASE(object):
         order as the scenarios list. Call this manually if scenarios were
         changed since the model was generated initially."""
         for i in range(len(self._spectra_file)):
-            self._delete_file("_spectra%d.dat") % i
+            self._delete_file("_spectra%d.dat" % (i+1))
         self._spectra_file = []
 
         result = PEGASE._call_binary('spectra', self._get_spectra_string())
@@ -609,7 +611,7 @@ class PEGASE(object):
         order as the scenarios list. Call this manually if scenarios were
         changed since the model was generated initially."""
         for i in range(len(self._colors_file)):
-            self._delete_file("_colors%d.dat") % i
+            self._delete_file("_colors%d.dat" % (i+1))
         self._colors_file = []
 
         for i in range(len(self.scenarios)):
@@ -626,10 +628,11 @@ class PEGASE(object):
                 raise Exception("colors file, " + colors_file +
                                 " not created.")
 
-    def _progress(self, progress, message=""):
+    def _progress(self, progress, message="", star=False):
         sys.stdout.write('\r{0} [{1}] {2}%   {3}'.format(
             "Generating: ", ('#'*int(progress/5)).ljust(20, " "),
-            int(progress), message))
+            int(progress), ("* " + message) if star else
+            ("  " + message)))
         sys.stdout.flush()
 
     def _generate(self, flagobj, *args):
@@ -668,12 +671,14 @@ class PEGASE(object):
         
         total_files = 9 + len(self.scenarios)*2
         while not flagobj['finished']:
+            blink = False
             filecount = len([name for name in os.listdir(PEGASE.pegase_dir) if os.path.isfile(
                 os.path.join(PEGASE.pegase_dir, name)) and name.startswith(self.name + "_")])
-            self._progress(100.0 * filecount/total_files, flagobj['message'])
+            self._progress(100.0 * filecount/total_files, flagobj['message'], star=blink)
             if flagobj['message'] == 'Error':
                 break
             sleep(0.1)
+            blink = not blink
         print ""
         return True
 
