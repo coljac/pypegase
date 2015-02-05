@@ -674,7 +674,7 @@ class PEGASE(object):
             blink = False
             filecount = len([name for name in os.listdir(PEGASE.pegase_dir) if os.path.isfile(
                 os.path.join(PEGASE.pegase_dir, name)) and name.startswith(self.name + "_")])
-            self._progress(100.0 * filecount/total_files, flagobj['message'], star=blink)
+            self._progress(100.0 * filecount/total_files, flagobj['message'].ljust(25), star=blink)
             if flagobj['message'] == 'Error':
                 break
             sleep(0.1)
