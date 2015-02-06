@@ -1037,7 +1037,7 @@ class PEGASE(object):
     def __repr__(self):
         result = "PEGASE \"%s\" [\n%s\nScenarios:\n" % (self.name, self.ssps)
         for i, scen in enumerate(self.scenarios):
-            result += "Scenario %d - %s\n" % (i, scen)
+            result += "Scenario %d - %s\n" % ((i+1), scen)
         return result
 
 if __name__ == "__main__":
