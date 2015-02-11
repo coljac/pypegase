@@ -26,7 +26,8 @@ from os.path import expanduser
 # Check: Binaries fraction/scenarios
 
 if not ("PEGASE_HOME") in os.environ.keys():
-    warn.warn('Warning: PEGASE_HOME not set, using default')
+    warn.warn('Warning: PEGASE_HOME not set, using default. ' + 
+      'You might want to set PEGASE.pegase_dir to a sensible value.')
 
 pypeg_yorn = {True: 'y', False: 'n'}
 
@@ -74,7 +75,7 @@ def get_default(key, defaultVal):
 class IMF(object):
     """
     Wrapper around an Initial Mass Function definition for use by PEGASE.
-    When PEGASE.generate is called, this class will generate the corect i
+    When PEGASE.generate is called, this class will generate the corect
     inputs to the PEGASE binaries, either by using pre-packaged IMFs
     such as Salpeter or Scalo86, or generating a custom file at runtime.
     """
@@ -102,7 +103,7 @@ class IMF(object):
         For instance, Scalo 86 would look like [(0.1, 3.2), (0.11, 2.455),
         (0.14, 2.0), ..., (41.69, -1.778)]
         :param gamma: A shortcut to creating a custom IMF, a power law with
-        only one value for the entire mass range. A gamma of -1.35 is
+        only one value for the entire mass range. A value of -1.35 is
         equivalent to the default Salpeter IMF.
         :return:
         """
@@ -126,6 +127,7 @@ class IMF(object):
         for power in self.powers:
             result += "%.2f     %.2f\n" % power
         result += "%.2f" % self.upper_mass
+        result += "\n"
         return result
 
     def __str__(self):
@@ -163,6 +165,9 @@ class Extinction(object):
 
 
 class Scenario(object):
+    """ Encapsulates a PEGASE scenario to be applied to the stellar 
+    population when generating spectra. 
+    """
     def __init__(self, description="",
                  binaries_fraction=0.05, metallicity_ism_0=0,
                  infall=False, infall_timescale=1e3, infall_gas_metallicity=0,
@@ -172,7 +177,24 @@ class Scenario(object):
                  galactic_winds=False, age_of_winds=2.001e4,
                  neb_emission=True, 
                  extinction=Extinction.NO_EXTINCTION, inclination=0.):
-
+        """
+        Generates a scenario, using defaul values for those not passed at
+        creation. See the PEGASE docs for more information.
+        :param binaries_fraction: Default 0.05
+        :param metallicity_ism_0: ISM initial metallicity, default 0.
+        :param infall: Infall, default False.
+        :param infall_timescale: If infall=True, timescale for infall function.
+        :param  infall_gas_metallicity: If infall=True, the metallicity of the infalling gas (default 0.02).
+        :param sfr: An instance of the SFR class, the SFR to use. Default creates exponentially decaying per the PEGASE default values.
+        :param metallicity_evolution: Whether metallicity evolves over time, default True.
+        :param stellar_metallicity: Default 0.02.
+        :param substellar_fraction: Fraction of mass used to form substellar objects. Default 0.
+        :param galactic_winds: Galactic winds, default False.
+        :param age_of_winds: If galactic_winds = True, age of winds. Default = 2.001e4.
+        :param neb_emission: Nebular emissions on/off, default = True.
+        :param extinction: What sort of extinction to apply. An integer from the Extinction class. Default = Extinction.NO_EXTINCTION.
+        :param inclination: If extinction = Extinction.EXTINCTION_DISK_SPECIFIC, the inclination of the galaxy in degrees.
+        """
         self.description = description
         self.binaries_fraction = binaries_fraction
         self.metallicity_ism_0 = metallicity_ism_0
@@ -228,6 +250,10 @@ class SFR(object):
 
     def __init__(self, sfrtype=EXPONENTIAL_DECREASE, p1=None, p2=None,
                  filename=None):
+        """
+        :param sfrtype: What type of model. Valid values are those enumerated on this class. Default is SFR.EXPONENTIAL_DECREASE.
+        :param p1, p2: The p1 value to be used by PEGASE. For exponential decrease, defaults to p1=1000, p2=1. For CONSTANT, defaults to p1=5e-5, p2=.20001e05. For GAS_POWER_LAW, p1=1, p2=3e3.
+        """
         self.sfrtype = sfrtype
         self.p1 = p1
         self.p2 = p2
@@ -261,7 +287,6 @@ class SSP(object):
     def __init__(self, imf=None, ejecta=SNII_ejecta.MODEL_B,
                  galactic_winds=True):
         """
-
         :param imf: An IMF instance. If not provided, defaults to Salpeter 55
         :param ejecta: Defaults to SNII_ejecta.MODEL_B
         :param galactic_winds: On or off, defaults to True
@@ -328,8 +353,8 @@ generate colors."""
                  calibration_type=CALIBRATION_AB):
         """
         :param name: A name for the filter to be used in outputs
-        :param responses: A list of tuples, or a 2D numpy aray, containing
-        wavelength-response
+        :param responses: A list of tuples, or a 2D numpy array, containing
+        wavelength-response. E.g. [(6000, 0.8), (6020, 0.798), ... (6700, 0.02)]
         pairs.
         """
         self.name = name
@@ -447,7 +472,7 @@ class PEGASE(object):
     @classmethod
     def from_file(cls, filename):
         """
-        Unpickles a PEGASE object.
+        Unpickles a PEGASE object. E.g. PEGASE.from_file("model1.peg")
         :param filename: The pickled file.
         :return: A PEGASE instance.
         """
@@ -468,6 +493,7 @@ class PEGASE(object):
 
     @classmethod
     def get_calib(cls):
+        """Returns a table containing the data from calib.dat."""
         calib_data = PEGASE._read_file("calib.dat")
         calib_data = calib_data.replace("mean lambda", "mean_lambda")
         calib_data = calib_data.replace("lambda eff(Vega)", "lambda_eff(Vega)")
@@ -999,7 +1025,7 @@ class PEGASE(object):
         """
         Saves the PEGASE instance to disk, so it can be unpickled later and
         provide convenient wrapper around a set of parameters and output files.
-        :param filename: The file to pickle to.
+        :param filename: The file to pickle to. Suggest .peg suffix.
         :return: None
         """
         if filename is None:
