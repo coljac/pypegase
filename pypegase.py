@@ -138,7 +138,7 @@ class IMF(object):
         #                                 self.lower_mass, self.upper_mass)
 
     def __repr__(self):
-        return ("%s [number=%d%s, lower_mass=%.4f, upper_mass=%.4f, " +
+        return ("%s [number=%d%s, lower_mass=%.4g, upper_mass=%.4g, " +
                 "powers=%s]") % (
                     ("Custom IMF" if self.number == IMF.CUSTOM else "IMF"),
                     self.number,
@@ -222,10 +222,10 @@ class Scenario(object):
 
     def __repr__(self):
         return (
-            "Scenario (%s) [\n    binaries_fraction=%.2f, metallicity_ism_0=%.4f, infall=%s," +
-            " infall_timescale=%.4f,\n    infall_gas_metallicity=%.4f,\n" +
-            "    %s,\n    metallicity_evolution=%s, stellar_metallicity=%.4f,\n" +
-            "    substellar_fraction=%.2f, galactic_winds=%s, age_of_winds=%.4f,\n" +
+            "Scenario (%s) [\n    binaries_fraction=%.2f, metallicity_ism_0=%.4g, infall=%s," +
+            " infall_timescale=%.4g,\n    infall_gas_metallicity=%.4g,\n" +
+            "    %s,\n    metallicity_evolution=%s, stellar_metallicity=%.4g,\n" +
+            "    substellar_fraction=%.2f, galactic_winds=%s, age_of_winds=%.4g,\n" +
             "    neb_emission=%s, extinction=%d, inclination=%.2f\n]") % (
                 self.description, self.binaries_fraction, self.metallicity_ism_0,
                 pypeg_yorn[self.infall], self.infall_timescale,
@@ -275,7 +275,7 @@ class SFR(object):
         return self.__repr__()
 
     def __repr__(self):
-        return "SFR: [type=%d%s, p1=%.4f, p2=%.4f, filename=%s]" \
+        return "SFR: [type=%d%s, p1=%.4g, p2=%.4g, filename=%s]" \
             % (self.sfrtype, [k for k in SFR.__dict__.keys() if
                               SFR.__dict__[k] == self.sfrtype],
                self.p1, self.p2, self.filename)
@@ -575,7 +575,7 @@ class PEGASE(object):
             raise e
 
         # check it worked
-        if result[1].rfind("eror") > -1 or result[0] != 0:
+        if result[1].rfind("error") > -1 or result[0] != 0:
             raise Exception("SSPs: " + result[1] + " -- " + str(result[0]))
         ssp_file = self.name + "_SSPs.dat"
         if os.path.isfile(PEGASE.pegase_dir + ssp_file):
@@ -602,7 +602,7 @@ class PEGASE(object):
         """
         self._delete_file("_scenarios.dat")
         result = PEGASE._call_binary('scenarios', self._get_scenario_string())
-        if result[1].rfind("eror") > -1 or result[0] != 0:
+        if result[1].rfind("error") > -1 or result[0] != 0:
             raise Exception("Scenarios: " + result[1] + " -- " +
                             str(result[0]))
         scenarios_file = self.name + "_scenarios.dat"
@@ -621,7 +621,7 @@ class PEGASE(object):
         self._spectra_file = []
 
         result = PEGASE._call_binary('spectra', self._get_spectra_string())
-        if result[1].rfind("eror") > -1 or result[0] != 0:
+        if result[1].rfind("error") > -1 or result[0] != 0:
             raise Exception("Scenarios: " + result[1] + " -- " +
                             str(result[0]))
         for i, scenario in enumerate(self.scenarios):
@@ -643,7 +643,7 @@ class PEGASE(object):
         for i in range(len(self.scenarios)):
             result = PEGASE._call_binary('colors',
                                          self._get_colors_string(i+1))
-            if result[1].rfind("eror") > -1 or result[0] != 0:
+            if result[1].rfind("error") > -1 or result[0] != 0:
                 raise Exception("Colors: " + result[1] +
                                 " -- " + str(result[0]))
 
@@ -727,24 +727,24 @@ class PEGASE(object):
         :return: String to be sent to stdin for that binary.
         """
 
-        result = "%s\n%s\n%.4f\n" % \
+        result = "%s\n%s\n%.4g\n" % \
                  (self.name + "_scenarios.dat", self.name + "_SSPs.dat",
                   self.scenarios[0].binaries_fraction)
 
         for i, sc in enumerate(self.scenarios):
-            result += "%s\n%.4f\n%s\n" % (self.name + "_spectra" +
+            result += "%s\n%.4g\n%s\n" % (self.name + "_spectra" +
                                           str(i + 1) + ".dat",
                                           sc.metallicity_ism_0,
                                           pypeg_yorn[sc.infall])
             if sc.infall:
-                result += "%.4f\n%.4f\n" % (
+                result += "%.4g\n%.4g\n" % (
                     sc.infall_timescale, sc.infall_gas_metallicity)
 
             result += "%d\n" % sc.sfr.sfrtype
 
             if sc.sfr.sfrtype in [
                     SFR.CONSTANT, SFR.EXPONENTIAL_DECREASE, SFR.GAS_POWER_LAW]:
-                result += "%.4f\n%.4f\n" % (sc.sfr.p1, sc.sfr.p2)
+                result += "%.4g\n%.4g\n" % (sc.sfr.p1, sc.sfr.p2)
 
             if sc.sfr.sfrtype in [SFR.FILE_SFR, SFR.FILE_SFR_AND_Z]:
                 result += "%s\n" % (sc.filename)
@@ -752,17 +752,17 @@ class PEGASE(object):
             if sc.sfr.sfrtype != SFR.FILE_SFR_AND_Z:
                 result += "%s\n" % pypeg_yorn[sc.metallicity_evolution]
                 if not sc.metallicity_evolution:
-                    result += "%.4f\n" % sc.stellar_metallicity
+                    result += "%.4g\n" % sc.stellar_metallicity
 
-            result += "%.4f\n%s\n" % (sc.substellar_fraction,
+            result += "%.4g\n%s\n" % (sc.substellar_fraction,
                                       pypeg_yorn[sc.galactic_winds])
             if sc.galactic_winds:
-                result += "%.4f\n" % sc.age_of_winds
+                result += "%.4g\n" % sc.age_of_winds
 
             result += "%s\n%d\n" % (pypeg_yorn[sc.neb_emission], sc.extinction)
 
             if sc.extinction == Extinction.EXTINCTION_DISK_SPECIFIC:
-                result += "%.4f\n" % sc.inclination
+                result += "%.4g\n" % sc.inclination
 
         return result + "end\n"
 
